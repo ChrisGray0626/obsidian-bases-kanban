@@ -1,5 +1,5 @@
 import assert from 'node:assert';
-import { beforeEach, describe, test } from 'node:test';
+import { beforeEach, describe, mock, test } from 'node:test';
 import type { BasesEntry, BasesPropertyId } from 'obsidian';
 import { CSS_CLASSES, DATA_ATTRIBUTES, SWIMLANE_KEY_SEPARATOR, UNCATEGORIZED_LABEL } from '../src/constants.ts';
 import { isCardOrders, isCollapsedLanes, isColumnOrders, KanbanView } from '../src/kanbanView.ts';
@@ -511,5 +511,118 @@ describe('Swimlane empty-column remove button (#90)', () => {
 			!(view as any)._prefs.columnOrder.includes('Blocked'),
 			'Removed column should not appear in in-memory column order',
 		);
+	});
+});
+
+describe('cardOrders pruning with swimlanes', () => {
+	test('Keeps a just-dropped card in its new lane while the query lags', async () => {
+		const { view, controller } = createSwimlaneView(() => PROPERTY_PRIORITY);
+		triggerDataUpdate(view);
+
+		const highLane = getLane(view, 'High');
+		const lowLane = getLane(view, 'Low');
+		const highToDoBody = getColumnWithin(highLane, 'To Do').querySelector<HTMLElement>(`.${CSS_CLASSES.COLUMN_BODY}`);
+		const lowToDoBody = getColumnWithin(lowLane, 'To Do').querySelector<HTMLElement>(`.${CSS_CLASSES.COLUMN_BODY}`);
+		assert.ok(highToDoBody, 'Expected High / To Do column body to exist');
+		assert.ok(lowToDoBody, 'Expected Low / To Do column body to exist');
+
+		// Simulate Sortable: drop Task A from High / To Do into the empty Low / To Do.
+		const card = highToDoBody.querySelector<HTMLElement>(`.${CSS_CLASSES.CARD}`) as HTMLElement;
+		highToDoBody.removeChild(card);
+		lowToDoBody.appendChild(card);
+
+		await (view as any).handleCardDrop({
+			item: card,
+			from: highToDoBody,
+			to: lowToDoBody,
+			oldIndex: 0,
+			newIndex: 0,
+		});
+
+		// Simulate the lagging query: Task A still reports High priority.
+		triggerDataUpdate(view);
+
+		const scopedKey = `${PROPERTY_STATUS}${SWIMLANE_KEY_SEPARATOR}${PROPERTY_PRIORITY}`;
+		const saved = controller.config.get('cardOrders') as Record<string, Record<string, string[]>>;
+		assert.deepStrictEqual(
+			saved[scopedKey][`Low${SWIMLANE_KEY_SEPARATOR}To Do`],
+			['Task A.md'],
+			'Dropped card must survive in the new lane despite query lag',
+		);
+		assert.deepStrictEqual(
+			saved[scopedKey][`High${SWIMLANE_KEY_SEPARATOR}To Do`],
+			['Task B.md'],
+			'Old lane order must stay clean',
+		);
+	});
+
+	test('Frontmatter change outside drag-and-drop moves the saved entry between lanes', () => {
+		const { view, controller } = createSwimlaneView(() => PROPERTY_PRIORITY);
+
+		const scopedKey = `${PROPERTY_STATUS}${SWIMLANE_KEY_SEPARATOR}${PROPERTY_PRIORITY}`;
+		// Task C used to live in Low / Done; its priority has since changed to High.
+		controller.config.set('cardOrders', {
+			[scopedKey]: { [`Low${SWIMLANE_KEY_SEPARATOR}Done`]: ['Task C.md'] },
+		});
+		controller.data.data = [
+			...createSwimlaneEntries().filter((e) => e.getValue(PROPERTY_STATUS)?.toString() !== 'Done'),
+			createMockBasesEntry(createMockTFile('Task C.md'), {
+				[PROPERTY_STATUS]: 'Done',
+				[PROPERTY_PRIORITY]: 'High',
+				[PROPERTY_ASSIGNEE]: 'Alice',
+			}),
+		];
+
+		triggerDataUpdate(view);
+
+		const saved = controller.config.get('cardOrders') as Record<string, Record<string, string[]>>;
+		assert.deepStrictEqual(
+			saved[scopedKey][`High${SWIMLANE_KEY_SEPARATOR}Done`],
+			['Task C.md'],
+			'Moved path should be appended to the new lane cell',
+		);
+		assert.deepStrictEqual(saved[scopedKey][`Low${SWIMLANE_KEY_SEPARATOR}Done`], [], 'Old lane cell should be emptied');
+	});
+});
+
+describe('Detached element creation (#112)', () => {
+	test('the test document rejects createDiv() the way Obsidian does', () => {
+		assert.throws(() => document.createDiv(), { name: 'HierarchyRequestError' });
+		assert.throws(() => document.createEl('div'), { name: 'HierarchyRequestError' });
+		assert.throws(() => document.createSpan(), { name: 'HierarchyRequestError' });
+	});
+
+	// Exercises every element the view builds detached before inserting it.
+	test('a board with lanes, an empty column, quick add and the color picker renders without errors', () => {
+		const errorLog = mock.method(console, 'error');
+		try {
+			const { view, controller } = createSwimlaneView(() => PROPERTY_PRIORITY);
+			controller.config.set('columnOrders', { [PROPERTY_STATUS]: ['To Do', 'Done', 'Blocked'] });
+			controller.config.set('quickAddFolder', 'cards');
+			triggerDataUpdate(view);
+
+			const highLane = getLane(view, 'High');
+			const toDoColumn = getColumnWithin(highLane, 'To Do');
+			assert.ok(toDoColumn.querySelector(`.${CSS_CLASSES.CARD}`), 'Cards should render inside the column');
+			assert.ok(toDoColumn.querySelector(`.${CSS_CLASSES.COLUMN_ADD_BTN}`), 'Quick add button should render');
+			assert.ok(
+				getColumnWithin(highLane, 'Blocked').querySelector(`.${CSS_CLASSES.COLUMN_REMOVE_BTN}`),
+				'Remove button should render for the globally-empty column',
+			);
+
+			const colorBtn = toDoColumn.querySelector<HTMLElement>(`.${CSS_CLASSES.COLUMN_COLOR_BTN}`);
+			assert.ok(colorBtn, 'Color button should render');
+			colorBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+			const popover = document.querySelector<HTMLElement>(`.${CSS_CLASSES.COLUMN_COLOR_POPOVER}`);
+			assert.ok(popover, 'Color picker popover should open');
+			assert.ok(popover.querySelector(`.${CSS_CLASSES.COLUMN_COLOR_SWATCH}`), 'Popover should contain swatches');
+			document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+			assert.strictEqual(document.querySelector(`.${CSS_CLASSES.COLUMN_COLOR_POPOVER}`), null, 'Popover should close');
+
+			const logged = errorLog.mock.calls.map((call) => call.arguments.map(String).join(' ')).join('\n');
+			assert.strictEqual(errorLog.mock.callCount(), 0, `Rendering logged errors:\n${logged}`);
+		} finally {
+			errorLog.mock.restore();
+		}
 	});
 });
