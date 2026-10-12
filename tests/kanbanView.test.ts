@@ -1,3 +1,4 @@
+import { getFrontMatterInfo, parseYaml } from './mocks/obsidian.ts';
 import assert from 'node:assert';
 import { beforeEach, describe, mock, test } from 'node:test';
 import { Notice } from 'obsidian';
@@ -1265,11 +1266,7 @@ describe('Drag and Drop - Sortable Initialization', () => {
 		assert.ok(viewInstances.length > 0, 'Sortable instances should be created');
 
 		viewInstances.forEach((instance: any) => {
-			assert.strictEqual(
-				instance.options.sort,
-				true,
-				'Card Sortable should allow same-column drag attempts so a sorted board can warn on reorder',
-			);
+			assert.strictEqual(instance.options.sort, true, 'Card Sortable should allow reordering while Base sort is active');
 			assert.strictEqual(instance.options.group, SORTABLE_GROUP, 'Card Sortable should still allow cross-column dragging');
 		});
 	});
@@ -2891,13 +2888,10 @@ describe('Card Order - Persistence', () => {
 		const savedOrders = controller.config.get('cardOrders') as Record<string, Record<string, string[]>> | null;
 		assert.strictEqual(savedOrders?.[PROPERTY_STATUS]?.['To Do'], undefined);
 
-		const writes = app.fileManager.processFrontMatter.calls.map(
-			([file, update]: [any, (frontmatter: Record<string, unknown>) => void]) => {
-				const frontmatter: Record<string, unknown> = {};
-				update(frontmatter);
-				return [file.path, frontmatter.rank];
-			},
-		);
+		const writes = app.vault.process.calls.map(([file, update]: [any, (content: string) => string]) => {
+			const frontmatter = parseYaml(getFrontMatterInfo(update('')).frontmatter) as Record<string, unknown>;
+			return [file.path, frontmatter.rank];
+		});
 		assert.deepStrictEqual(writes, [
 			['Task 2.md', 1],
 			['Task 1.md', 2],
@@ -2939,7 +2933,8 @@ describe('Card Order - Persistence', () => {
 			newIndex: 0,
 		});
 
-		assert.strictEqual(app.fileManager.processFrontMatter.calls.length, 3);
+		assert.strictEqual(app.fileManager.processFrontMatter.calls.length, 1);
+		assert.strictEqual(app.vault.process.calls.length, 2);
 		const orderWrites = app.fileManager.processFrontMatter.calls
 			.map(([file, update]: [any, (frontmatter: Record<string, unknown>) => void]) => {
 				const frontmatter: Record<string, unknown> = {};
@@ -2947,6 +2942,12 @@ describe('Card Order - Persistence', () => {
 				return [file.path, frontmatter.rank];
 			})
 			.filter(([, rank]: [string, unknown]) => rank !== undefined);
+		orderWrites.push(
+			...app.vault.process.calls.map(([file, update]: [any, (content: string) => string]) => {
+				const fm = parseYaml(getFrontMatterInfo(update('')).frontmatter) as Record<string, unknown>;
+				return [file.path, fm.rank];
+			}),
+		);
 		assert.deepStrictEqual(
 			new Map(orderWrites),
 			new Map([
@@ -3043,7 +3044,7 @@ describe('Card Order - Persistence', () => {
 		const entries = createEntriesWithStatus();
 		controller = createMockQueryController(entries, TEST_PROPERTIES);
 		controller.app = app;
-		controller.config.getAsPropertyId = () => PROPERTY_STATUS;
+		controller.config.getAsPropertyId = mockGroupByProperty(PROPERTY_STATUS);
 		controller.config.set('cardOrders', {
 			[PROPERTY_STATUS]: { 'To Do': ['Task 1.md', 'Task 3.md', 'Task 2.md'] },
 		});
@@ -4136,7 +4137,7 @@ describe('cardOrders pruning', () => {
 		const entries = createEntriesWithStatus();
 		controller = createMockQueryController(entries, TEST_PROPERTIES);
 		controller.app = app;
-		controller.config.getAsPropertyId = () => PROPERTY_STATUS;
+		controller.config.getAsPropertyId = mockGroupByProperty(PROPERTY_STATUS);
 		controller.config.set('cardOrders', {
 			[PROPERTY_STATUS]: {
 				'To Do': ['Task 1.md', 'Task 3.md', 'Task 2.md'],
@@ -4159,7 +4160,7 @@ describe('cardOrders pruning', () => {
 		const entries = createEntriesWithStatus().filter((e) => e.file.path === 'Task 1.md' || e.file.path === 'Task 2.md');
 		controller = createMockQueryController(entries, TEST_PROPERTIES);
 		controller.app = app;
-		controller.config.getAsPropertyId = () => PROPERTY_STATUS;
+		controller.config.getAsPropertyId = mockGroupByProperty(PROPERTY_STATUS);
 		controller.config.set('cardOrders', {
 			[PROPERTY_STATUS]: {
 				'To Do': ['Task 2.md', 'Task 1.md'],
@@ -4184,7 +4185,7 @@ describe('cardOrders pruning', () => {
 		const entries = createEntriesWithStatus();
 		controller = createMockQueryController(entries, TEST_PROPERTIES);
 		controller.app = app;
-		controller.config.getAsPropertyId = () => PROPERTY_STATUS;
+		controller.config.getAsPropertyId = mockGroupByProperty(PROPERTY_STATUS);
 
 		const view = new KanbanView(controller, scrollEl);
 		setupKanbanViewWithApp(view, app);
@@ -4227,7 +4228,7 @@ describe('cardOrders pruning', () => {
 		const entries = createEntriesWithStatus();
 		controller = createMockQueryController(entries, TEST_PROPERTIES);
 		controller.app = app;
-		controller.config.getAsPropertyId = () => PROPERTY_STATUS;
+		controller.config.getAsPropertyId = mockGroupByProperty(PROPERTY_STATUS);
 
 		const view = new KanbanView(controller, scrollEl);
 		setupKanbanViewWithApp(view, app);
@@ -4277,7 +4278,7 @@ describe('cardOrders pruning', () => {
 		const entries = createEntriesWithStatus();
 		controller = createMockQueryController(entries, TEST_PROPERTIES);
 		controller.app = app;
-		controller.config.getAsPropertyId = () => PROPERTY_STATUS;
+		controller.config.getAsPropertyId = mockGroupByProperty(PROPERTY_STATUS);
 
 		const view = new KanbanView(controller, scrollEl);
 		setupKanbanViewWithApp(view, app);
@@ -4334,7 +4335,7 @@ describe('cardOrders pruning', () => {
 		const entries = createEntriesWithStatus();
 		controller = createMockQueryController(entries, TEST_PROPERTIES);
 		controller.app = app;
-		controller.config.getAsPropertyId = () => PROPERTY_STATUS;
+		controller.config.getAsPropertyId = mockGroupByProperty(PROPERTY_STATUS);
 		(app.fileManager as any).processFrontMatter = () => Promise.reject(new Error('write failed'));
 		const errorLog = mock.method(console, 'error', () => {});
 
@@ -4357,7 +4358,10 @@ describe('cardOrders pruning', () => {
 		toDoBody.removeChild(card);
 		doingBody.insertBefore(card, doingBody.firstChild);
 
-		await (view as any).handleCardDrop({ item: card, from: toDoBody, to: doingBody, oldIndex: 0, newIndex: 0 });
+		await assert.rejects(
+			(view as any).handleCardDrop({ item: card, from: toDoBody, to: doingBody, oldIndex: 0, newIndex: 0 }),
+			/write failed/,
+		);
 
 		assert.ok(errorLog.mock.calls.length > 0, 'Precondition: the frontmatter write should have failed');
 
@@ -4368,13 +4372,14 @@ describe('cardOrders pruning', () => {
 			['Task 2.md', 'Task 1.md'],
 			'Card reconciles back to its real column',
 		);
+		errorLog.mock.restore();
 	});
 
-	test('Does not prune while a Base sort is active', () => {
+	test('Reconciles implicit order while a Base sort is active', () => {
 		const entries = createEntriesWithStatus();
 		controller = createMockQueryController(entries, TEST_PROPERTIES);
 		controller.app = app;
-		controller.config.getAsPropertyId = () => PROPERTY_STATUS;
+		controller.config.getAsPropertyId = mockGroupByProperty(PROPERTY_STATUS);
 		controller.config.set('sort', [{ property: 'file.mtime', direction: 'DESC' }]);
 		controller.config.set('cardOrders', {
 			[PROPERTY_STATUS]: { 'To Do': ['Task 1.md', 'Task 3.md'] },
@@ -4387,8 +4392,8 @@ describe('cardOrders pruning', () => {
 		const saved = controller.config.get('cardOrders') as Record<string, Record<string, string[]>>;
 		assert.deepStrictEqual(
 			saved[PROPERTY_STATUS]['To Do'],
-			['Task 1.md', 'Task 3.md'],
-			'Sorted board must not rewrite order',
+			['Task 1.md'],
+			'Base sort must not prevent stale implicit order reconciliation',
 		);
 	});
 
@@ -4396,7 +4401,7 @@ describe('cardOrders pruning', () => {
 		const entries = createEntriesWithStatus();
 		controller = createMockQueryController(entries, TEST_PROPERTIES);
 		controller.app = app;
-		controller.config.getAsPropertyId = () => PROPERTY_STATUS;
+		controller.config.getAsPropertyId = mockGroupByProperty(PROPERTY_STATUS);
 		controller.config.set('cardOrders', {
 			[PROPERTY_STATUS]: { 'To Do': ['Task 2.md', 'Task 1.md'] },
 		});
@@ -4447,7 +4452,7 @@ describe('cardOrders write-back is not defeated by aliasing (#94)', () => {
 		const entries = createEntriesWithStatus();
 		controller = createMockQueryController(entries, TEST_PROPERTIES);
 		controller.app = app;
-		controller.config.getAsPropertyId = () => PROPERTY_STATUS;
+		controller.config.getAsPropertyId = mockGroupByProperty(PROPERTY_STATUS);
 
 		const view = new KanbanView(controller, scrollEl);
 		setupKanbanViewWithApp(view, app);
@@ -4473,7 +4478,7 @@ describe('cardOrders write-back is not defeated by aliasing (#94)', () => {
 		const entries = createEntriesWithStatus();
 		controller = createMockQueryController(entries, TEST_PROPERTIES);
 		controller.app = app;
-		controller.config.getAsPropertyId = () => PROPERTY_STATUS;
+		controller.config.getAsPropertyId = mockGroupByProperty(PROPERTY_STATUS);
 
 		const view = new KanbanView(controller, scrollEl);
 		setupKanbanViewWithApp(view, app);

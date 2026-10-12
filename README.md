@@ -39,8 +39,8 @@ A kanban-style drag-and-drop custom view for Obsidian Bases that allows you to o
 
 1. Clone this repository:
    ```bash
-   git clone https://github.com/xiwcx/obsidian-bases-kanban-custom-view.git
-   cd obsidian-bases-kanban-custom-view
+   git clone https://github.com/xiwcx/obsidian-bases-kanban.git
+   cd obsidian-bases-kanban
    ```
 
 2. Install dependencies:
@@ -81,6 +81,8 @@ If your base has a "Status" property with values "To Do", "Doing", and "Done":
 - Drag columns by their handle to reorder them - your order preference will be remembered
 
 Card order follows drag and drop. Without a "Card order" property, the order is private to this Base view. With a writable property such as `rank`, the plugin reads its numeric values and updates affected positions after same-column or cross-column drags. A Base Sort setting does not override the persisted drag order.
+
+Card order must be a writable `note.*` property distinct from the column and swimlane grouping properties. Positions restart in each visible column or swimlane/column cell. Unchanged ranks preserve the original file bytes; changed frontmatter is serialized using Obsidian YAML helpers. Writes across several notes are not one transaction. See [verification and screenshots](docs/card-order/verification.md).
 
 If your base also has a "Priority" property with values "High", "Medium", and "Low":
 - Select "Status" in the "Group by" dropdown

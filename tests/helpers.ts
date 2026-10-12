@@ -289,6 +289,7 @@ export function createMockApp(imageFiles: Record<string, { path: string }> = {})
 			getFirstLinkpathDest: (linkpath: string, _sourcePath: string) => imageFiles[linkpath] ?? null,
 		} as any,
 		vault: {
+			process: createMockFn(),
 			getMarkdownFiles: () => markdownFiles,
 			getFolderByPath: (path: string) => ({ path, name: path.split('/').pop() ?? path }),
 			getAbstractFileByPath: (path: string) => markdownFiles.find((file) => file.path === path) ?? null,

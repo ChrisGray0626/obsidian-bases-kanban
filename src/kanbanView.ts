@@ -42,7 +42,7 @@ import {
 	SWIMLANE_KEY_SEPARATOR,
 	UNCATEGORIZED_LABEL,
 } from './constants.ts';
-import { compareCardOrderValues, readCardOrderValue } from './utils/cardOrdering.ts';
+import { compareCardOrderValues, readCardOrderValue, updateCardOrderContent } from './utils/cardOrdering.ts';
 import type { DebouncedFn } from './utils/debounce.ts';
 import { debounce } from './utils/debounce.ts';
 import { ensureGroupExists, normalizePropertyValue } from './utils/grouping.ts';
@@ -447,9 +447,17 @@ export class KanbanView extends BasesView {
 			const groupedEntries = groupedByLane
 				? this.flattenLanes(groupedByLane)
 				: this.groupEntriesByProperty(entries, this.groupByPropertyId);
-			// Card order is always driven by dragging. A configured note property is
-			// the visible persistence layer; otherwise the view-local cardOrders map is
-			// used as the implicit persistence layer.
+			// Reconcile implicit positions with live groups, retaining upstream's
+			// pending-move protection while the Bases query catches up with a drop.
+			if (
+				!this.cardOrderPropertyId &&
+				!this._dragging &&
+				this._pruneCardOrders(this.buildLivePathToKey(groupedByLane, groupedEntries))
+			) {
+				this._persistPrefs();
+			}
+
+			// Explicit order takes precedence; otherwise use the view's saved order.
 			if (this.cardOrderPropertyId) {
 				const columnSets = groupedByLane ? groupedByLane.values() : [groupedEntries];
 				for (const columns of columnSets) {
@@ -1359,7 +1367,7 @@ export class KanbanView extends BasesView {
 			if (oldColumnEl?.instanceOf(HTMLElement) && oldColumnValue) {
 				this._prefs.cardOrders[oldKey] = oldPaths;
 			}
-			this._prefs.cardOrders[newKey] = getColumnPaths(evt.to);
+			this._prefs.cardOrders[newKey] = newPaths;
 			// The frontmatter write below triggers a re-render before the query
 			// catches up; defer reconciliation of this card until it does. If
 			// a prior drop is still awaiting confirmation, the query may lag
@@ -1518,8 +1526,8 @@ export class KanbanView extends BasesView {
 		if (!propertyId.startsWith('note.')) {
 			throw new Error(`Card order property must be a writable note property: ${propertyId}`);
 		}
-		if (!this.app?.fileManager) {
-			throw new Error('File manager not available');
+		if (!this.app?.vault) {
+			throw new Error('Vault not available');
 		}
 
 		const propertyName = parsePropertyId(propertyId).name;
@@ -1528,12 +1536,7 @@ export class KanbanView extends BasesView {
 			const entry = this._entryMap.get(path);
 			if (!entry) throw new Error(`Entry not found for card order: ${path}`);
 			const order = index + 1;
-			if (readCardOrderValue(entry.getValue(propertyId)?.toString()) === order) return [];
-			return [
-				this.app.fileManager.processFrontMatter(entry.file, (frontmatter: Record<string, unknown>) => {
-					frontmatter[propertyName] = order;
-				}),
-			];
+			return [this.app.vault.process(entry.file, (content) => updateCardOrderContent(content, propertyName, order))];
 		});
 		await Promise.all(updates);
 	}
